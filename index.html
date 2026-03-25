@@ -1,0 +1,969 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>zOCRExtract — Image to Text</title>
+  <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+  <style>
+    /* ── Reset & Variables ──────────────────────────────────────────── */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg-from:   #0f0c29;
+      --bg-mid:    #302b63;
+      --bg-to:     #24243e;
+      --card:      rgba(255,255,255,0.07);
+      --card-border: rgba(255,255,255,0.15);
+      --accent1:   #a855f7;
+      --accent2:   #ec4899;
+      --accent3:   #06b6d4;
+      --green:     #10b981;
+      --yellow:    #f59e0b;
+      --text:      #f1f5f9;
+      --text-muted:#94a3b8;
+      --radius:    16px;
+      --shadow:    0 8px 32px rgba(0,0,0,0.4);
+      --transition: 0.25s ease;
+    }
+
+    /* ── Body / Layout ──────────────────────────────────────────────── */
+    body {
+      font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+      background: linear-gradient(135deg, var(--bg-from), var(--bg-mid), var(--bg-to));
+      min-height: 100vh;
+      color: var(--text);
+      padding: 24px 16px 48px;
+    }
+
+    .container {
+      max-width: 960px;
+      margin: 0 auto;
+    }
+
+    /* ── Header ─────────────────────────────────────────────────────── */
+    header {
+      text-align: center;
+      padding: 32px 0 40px;
+    }
+    header .logo {
+      display: inline-flex;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 8px;
+    }
+    header .logo svg { width: 48px; height: 48px; filter: drop-shadow(0 0 12px var(--accent1)); }
+    header h1 {
+      font-size: clamp(1.8rem, 4vw, 2.8rem);
+      font-weight: 800;
+      background: linear-gradient(90deg, var(--accent1), var(--accent2), var(--accent3));
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+      letter-spacing: -0.5px;
+    }
+    header p {
+      color: var(--text-muted);
+      font-size: 1rem;
+      margin-top: 8px;
+    }
+
+    /* ── Card ───────────────────────────────────────────────────────── */
+    .card {
+      background: var(--card);
+      border: 1px solid var(--card-border);
+      border-radius: var(--radius);
+      padding: 28px;
+      box-shadow: var(--shadow);
+      backdrop-filter: blur(12px);
+      margin-bottom: 24px;
+    }
+    .card-title {
+      font-size: 0.75rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 1.5px;
+      color: var(--text-muted);
+      margin-bottom: 16px;
+    }
+
+    /* ── Drop Zone ──────────────────────────────────────────────────── */
+    #drop-zone {
+      border: 2px dashed var(--card-border);
+      border-radius: var(--radius);
+      padding: 48px 24px;
+      text-align: center;
+      cursor: pointer;
+      transition: var(--transition);
+      position: relative;
+      overflow: hidden;
+    }
+    #drop-zone::before {
+      content: '';
+      position: absolute;
+      inset: 0;
+      background: radial-gradient(circle at 50% 50%, rgba(168,85,247,0.08), transparent 70%);
+      pointer-events: none;
+    }
+    #drop-zone:hover, #drop-zone.drag-over {
+      border-color: var(--accent1);
+      background: rgba(168,85,247,0.08);
+    }
+    #drop-zone.drag-over { transform: scale(1.01); }
+
+    #drop-zone svg { width: 56px; height: 56px; color: var(--accent1); margin-bottom: 16px; }
+    #drop-zone .drop-title {
+      font-size: 1.15rem;
+      font-weight: 600;
+      margin-bottom: 6px;
+    }
+    #drop-zone .drop-sub {
+      color: var(--text-muted);
+      font-size: 0.875rem;
+    }
+    #file-input { display: none; }
+
+    /* ── Image Previews ─────────────────────────────────────────────── */
+    #preview-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+      gap: 12px;
+      margin-top: 20px;
+    }
+    .preview-item {
+      position: relative;
+      border-radius: 10px;
+      overflow: hidden;
+      border: 1px solid var(--card-border);
+      aspect-ratio: 1;
+      background: rgba(0,0,0,0.3);
+    }
+    .preview-item img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      display: block;
+    }
+    .preview-item .remove-btn {
+      position: absolute;
+      top: 6px;
+      right: 6px;
+      width: 24px;
+      height: 24px;
+      border-radius: 50%;
+      background: rgba(0,0,0,0.7);
+      border: none;
+      color: #fff;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 14px;
+      opacity: 0;
+      transition: var(--transition);
+    }
+    .preview-item:hover .remove-btn { opacity: 1; }
+    .preview-item .name-tag {
+      position: absolute;
+      bottom: 0; left: 0; right: 0;
+      background: rgba(0,0,0,0.65);
+      font-size: 0.7rem;
+      padding: 4px 6px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    /* ── Advanced Filters ───────────────────────────────────────────── */
+    .filters-toggle {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      cursor: pointer;
+      user-select: none;
+      width: fit-content;
+      font-size: 0.875rem;
+      font-weight: 600;
+      color: var(--accent1);
+      background: none;
+      border: none;
+      padding: 6px 0;
+      transition: var(--transition);
+    }
+    .filters-toggle svg { transition: transform 0.3s; }
+    .filters-toggle.open svg { transform: rotate(180deg); }
+
+    #filters-body {
+      display: none;
+      margin-top: 16px;
+      padding-top: 16px;
+      border-top: 1px solid var(--card-border);
+    }
+    #filters-body.open { display: block; }
+
+    .filter-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+      gap: 16px;
+    }
+    .filter-group { display: flex; flex-direction: column; gap: 6px; }
+    .filter-group label {
+      font-size: 0.75rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      color: var(--text-muted);
+    }
+    .filter-group select,
+    .filter-group input[type="text"],
+    .filter-group input[type="number"] {
+      background: rgba(255,255,255,0.05);
+      border: 1px solid var(--card-border);
+      border-radius: 8px;
+      color: var(--text);
+      padding: 8px 12px;
+      font-size: 0.875rem;
+      outline: none;
+      transition: var(--transition);
+      width: 100%;
+    }
+    .filter-group select:focus,
+    .filter-group input:focus {
+      border-color: var(--accent1);
+      box-shadow: 0 0 0 3px rgba(168,85,247,0.2);
+    }
+    .filter-group select option { background: #302b63; }
+
+    .range-inputs { display: flex; gap: 8px; align-items: center; }
+    .range-inputs span { color: var(--text-muted); font-size: 0.75rem; }
+    .range-inputs input { flex: 1; }
+
+    /* ── Action Buttons ─────────────────────────────────────────────── */
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 10px 20px;
+      border-radius: 10px;
+      font-size: 0.875rem;
+      font-weight: 600;
+      cursor: pointer;
+      border: none;
+      transition: var(--transition);
+      text-decoration: none;
+    }
+    .btn:disabled { opacity: 0.45; cursor: not-allowed; }
+
+    .btn-primary {
+      background: linear-gradient(135deg, var(--accent1), var(--accent2));
+      color: #fff;
+    }
+    .btn-primary:hover:not(:disabled) {
+      filter: brightness(1.15);
+      transform: translateY(-1px);
+      box-shadow: 0 4px 16px rgba(168,85,247,0.4);
+    }
+
+    .btn-secondary {
+      background: rgba(255,255,255,0.07);
+      color: var(--text);
+      border: 1px solid var(--card-border);
+    }
+    .btn-secondary:hover:not(:disabled) {
+      background: rgba(255,255,255,0.12);
+      transform: translateY(-1px);
+    }
+
+    .btn-green {
+      background: linear-gradient(135deg, var(--green), #059669);
+      color: #fff;
+    }
+    .btn-green:hover:not(:disabled) {
+      filter: brightness(1.15);
+      transform: translateY(-1px);
+      box-shadow: 0 4px 16px rgba(16,185,129,0.4);
+    }
+
+    .btn-cyan {
+      background: linear-gradient(135deg, var(--accent3), #0891b2);
+      color: #fff;
+    }
+    .btn-cyan:hover:not(:disabled) {
+      filter: brightness(1.15);
+      transform: translateY(-1px);
+      box-shadow: 0 4px 16px rgba(6,182,212,0.4);
+    }
+
+    .actions-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-top: 16px;
+    }
+
+    /* ── Progress ───────────────────────────────────────────────────── */
+    #progress-section {
+      display: none;
+      margin-bottom: 24px;
+    }
+    #progress-section.visible { display: block; }
+
+    .progress-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 8px;
+    }
+    #progress-label { font-size: 0.875rem; color: var(--text-muted); }
+    #progress-pct {
+      font-size: 0.875rem;
+      font-weight: 700;
+      color: var(--accent1);
+    }
+    #progress-bar-track {
+      height: 8px;
+      background: rgba(255,255,255,0.1);
+      border-radius: 99px;
+      overflow: hidden;
+    }
+    #progress-bar {
+      height: 100%;
+      width: 0%;
+      background: linear-gradient(90deg, var(--accent1), var(--accent2));
+      border-radius: 99px;
+      transition: width 0.3s ease;
+    }
+
+    /* ── Results ────────────────────────────────────────────────────── */
+    #results-section { display: none; }
+    #results-section.visible { display: block; }
+
+    .result-item {
+      margin-bottom: 20px;
+      border: 1px solid var(--card-border);
+      border-radius: 12px;
+      overflow: hidden;
+      background: rgba(0,0,0,0.2);
+    }
+    .result-item-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 12px 16px;
+      background: rgba(255,255,255,0.04);
+      border-bottom: 1px solid var(--card-border);
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+    .result-item-header .filename {
+      font-weight: 600;
+      font-size: 0.875rem;
+      color: var(--accent1);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      max-width: 300px;
+    }
+    .result-item-header .word-count {
+      font-size: 0.75rem;
+      color: var(--text-muted);
+      white-space: nowrap;
+    }
+    .result-item-btns { display: flex; gap: 8px; flex-shrink: 0; }
+    .result-item-btns .btn { padding: 6px 14px; font-size: 0.8rem; }
+
+    textarea.result-text {
+      width: 100%;
+      min-height: 140px;
+      background: transparent;
+      border: none;
+      outline: none;
+      color: var(--text);
+      font-size: 0.9rem;
+      font-family: 'Courier New', monospace;
+      line-height: 1.7;
+      padding: 16px;
+      resize: vertical;
+    }
+    textarea.result-text::placeholder { color: var(--text-muted); }
+
+    .no-results {
+      text-align: center;
+      padding: 32px;
+      color: var(--text-muted);
+      font-size: 0.9rem;
+    }
+
+    /* ── Bulk actions ───────────────────────────────────────────────── */
+    #bulk-actions {
+      display: none;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-bottom: 20px;
+      padding: 16px;
+      border-radius: 12px;
+      background: rgba(255,255,255,0.04);
+      border: 1px solid var(--card-border);
+    }
+    #bulk-actions.visible { display: flex; }
+
+    /* ── Toast ──────────────────────────────────────────────────────── */
+    #toast {
+      position: fixed;
+      bottom: 24px;
+      right: 24px;
+      padding: 12px 20px;
+      border-radius: 10px;
+      font-size: 0.875rem;
+      font-weight: 600;
+      color: #fff;
+      background: var(--green);
+      box-shadow: var(--shadow);
+      transform: translateY(80px);
+      opacity: 0;
+      transition: transform 0.35s cubic-bezier(.21,1.02,.73,1), opacity 0.35s;
+      pointer-events: none;
+      z-index: 9999;
+    }
+    #toast.show { transform: translateY(0); opacity: 1; }
+
+    /* ── Responsive ─────────────────────────────────────────────────── */
+    @media (max-width: 560px) {
+      .filter-grid { grid-template-columns: 1fr; }
+      .result-item-header { flex-direction: column; align-items: flex-start; }
+      .result-item-header .filename { max-width: 100%; }
+    }
+  </style>
+</head>
+<body>
+<div class="container">
+
+  <!-- Header -->
+  <header>
+    <div class="logo">
+      <svg viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <rect width="48" height="48" rx="12" fill="url(#hg)"/>
+        <path d="M12 16h8M12 24h24M12 32h16" stroke="#fff" stroke-width="2.5" stroke-linecap="round"/>
+        <rect x="28" y="14" width="8" height="10" rx="2" fill="rgba(255,255,255,0.25)" stroke="#fff" stroke-width="1.5"/>
+        <defs>
+          <linearGradient id="hg" x1="0" y1="0" x2="48" y2="48" gradientUnits="userSpaceOnUse">
+            <stop stop-color="#a855f7"/>
+            <stop offset="1" stop-color="#ec4899"/>
+          </linearGradient>
+        </defs>
+      </svg>
+    </div>
+    <h1>zOCRExtract</h1>
+    <p>Drop images &rarr; extract text instantly — 100% in-browser, no server, no data leaves your device</p>
+  </header>
+
+  <!-- Upload Card -->
+  <div class="card">
+    <div class="card-title">Upload Images</div>
+
+    <div id="drop-zone" role="button" aria-label="Drop images here or click to select" tabindex="0">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"
+           stroke-linecap="round" stroke-linejoin="round">
+        <path d="M4 16.004V18a2 2 0 002 2h12a2 2 0 002-2v-2"/>
+        <path d="M12 12V4m0 0L8.5 7.5M12 4l3.5 3.5"/>
+        <rect x="3" y="12" width="18" height="8" rx="2" opacity="0.15" fill="currentColor" stroke="none"/>
+      </svg>
+      <div class="drop-title">Drag &amp; drop images here</div>
+      <div class="drop-sub">or click to browse &mdash; PNG, JPG, WEBP, BMP, TIFF &amp; more &middot; multiple files supported</div>
+    </div>
+    <input id="file-input" type="file" accept="image/*" multiple />
+
+    <div id="preview-grid"></div>
+
+    <!-- Advanced Filters -->
+    <div style="margin-top:20px;">
+      <button class="filters-toggle" id="filters-toggle" aria-expanded="false">
+        <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2"
+             stroke-linecap="round" stroke-linejoin="round" width="16" height="16">
+          <path d="M3 5h14M6 10h8M9 15h2"/>
+        </svg>
+        Advanced Filters
+        <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2"
+             stroke-linecap="round" stroke-linejoin="round" width="14" height="14" id="chevron-icon">
+          <path d="M5 8l5 5 5-5"/>
+        </svg>
+      </button>
+
+      <div id="filters-body">
+        <div class="filter-grid">
+          <!-- Word length -->
+          <div class="filter-group">
+            <label>Word Length</label>
+            <div class="range-inputs">
+              <input type="number" id="min-length" placeholder="Min" min="1" max="100" value="" />
+              <span>–</span>
+              <input type="number" id="max-length" placeholder="Max" min="1" max="500" value="" />
+            </div>
+          </div>
+
+          <!-- String filter mode -->
+          <div class="filter-group">
+            <label>String Filter</label>
+            <select id="string-mode">
+              <option value="none">— None —</option>
+              <option value="starts">Starts with</option>
+              <option value="ends">Ends with</option>
+              <option value="contains">Contains</option>
+            </select>
+          </div>
+
+          <!-- String filter value -->
+          <div class="filter-group">
+            <label>Filter Text</label>
+            <input type="text" id="string-value" placeholder="Enter text…" />
+          </div>
+
+          <!-- Regex filter -->
+          <div class="filter-group">
+            <label>Regex Filter <span style="font-weight:400;text-transform:none;letter-spacing:0;color:var(--text-muted)">(per word)</span></label>
+            <input type="text" id="regex-value" placeholder="e.g. ^\d+$" />
+          </div>
+        </div>
+
+        <!-- Filter scope -->
+        <div style="margin-top:14px; display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
+          <span style="font-size:0.75rem;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:var(--text-muted);">Apply to:</span>
+          <label style="display:flex;align-items:center;gap:5px;font-size:0.85rem;cursor:pointer;">
+            <input type="radio" name="filter-scope" value="words" id="scope-words" checked /> Individual words
+          </label>
+          <label style="display:flex;align-items:center;gap:5px;font-size:0.85rem;cursor:pointer;">
+            <input type="radio" name="filter-scope" value="lines" id="scope-lines" /> Lines
+          </label>
+        </div>
+
+        <p style="margin-top:10px;font-size:0.78rem;color:var(--text-muted);">
+          Filters are applied on-the-fly after OCR. Leaving fields empty disables that filter.
+        </p>
+      </div>
+    </div>
+
+    <!-- Extract Button -->
+    <div class="actions-row">
+      <button class="btn btn-primary" id="extract-btn" disabled>
+        <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2"
+             stroke-linecap="round" stroke-linejoin="round" width="16" height="16">
+          <circle cx="10" cy="10" r="7"/><path d="M10 7v3l2 2"/>
+        </svg>
+        Extract Text
+      </button>
+      <button class="btn btn-secondary" id="clear-btn" disabled>
+        <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2"
+             stroke-linecap="round" stroke-linejoin="round" width="16" height="16">
+          <path d="M6 6l8 8M14 6l-8 8"/>
+        </svg>
+        Clear All
+      </button>
+    </div>
+  </div>
+
+  <!-- Progress -->
+  <div id="progress-section" class="card">
+    <div class="progress-header">
+      <span id="progress-label">Processing…</span>
+      <span id="progress-pct">0%</span>
+    </div>
+    <div id="progress-bar-track"><div id="progress-bar"></div></div>
+  </div>
+
+  <!-- Results -->
+  <div id="results-section">
+    <div id="bulk-actions">
+      <span style="font-size:0.875rem;font-weight:600;margin-right:4px;align-self:center;">All results:</span>
+      <button class="btn btn-green" id="bulk-copy-btn">
+        <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2"
+             stroke-linecap="round" stroke-linejoin="round" width="15" height="15">
+          <rect x="4" y="4" width="10" height="12" rx="2"/>
+          <path d="M7 4V3a1 1 0 011-1h6a1 1 0 011 1v11a1 1 0 01-1 1h-1"/>
+        </svg>
+        Copy All
+      </button>
+      <button class="btn btn-cyan" id="bulk-download-btn">
+        <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2"
+             stroke-linecap="round" stroke-linejoin="round" width="15" height="15">
+          <path d="M10 3v10m0 0l-3-3m3 3l3-3"/>
+          <path d="M4 17h12"/>
+        </svg>
+        Download All (.txt)
+      </button>
+      <button class="btn btn-secondary" id="refilter-btn">
+        <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2"
+             stroke-linecap="round" stroke-linejoin="round" width="15" height="15">
+          <path d="M3 5h14M6 10h8M9 15h2"/>
+        </svg>
+        Re-apply Filters
+      </button>
+    </div>
+
+    <div id="results-list"></div>
+  </div>
+
+</div><!-- /container -->
+
+<!-- Toast -->
+<div id="toast"></div>
+
+<script>
+/* ── State ──────────────────────────────────────────────────────── */
+const state = {
+  files: [],          // File objects
+  rawTexts: [],       // raw OCR strings, indexed same as files
+};
+
+/* ── DOM refs ───────────────────────────────────────────────────── */
+const dropZone        = document.getElementById('drop-zone');
+const fileInput       = document.getElementById('file-input');
+const previewGrid     = document.getElementById('preview-grid');
+const extractBtn      = document.getElementById('extract-btn');
+const clearBtn        = document.getElementById('clear-btn');
+const progressSection = document.getElementById('progress-section');
+const progressLabel   = document.getElementById('progress-label');
+const progressPct     = document.getElementById('progress-pct');
+const progressBar     = document.getElementById('progress-bar');
+const resultsSection  = document.getElementById('results-section');
+const resultsList     = document.getElementById('results-list');
+const bulkActions     = document.getElementById('bulk-actions');
+const bulkCopyBtn     = document.getElementById('bulk-copy-btn');
+const bulkDownloadBtn = document.getElementById('bulk-download-btn');
+const refilterBtn     = document.getElementById('refilter-btn');
+const filtersToggle   = document.getElementById('filters-toggle');
+const filtersBody     = document.getElementById('filters-body');
+const toastEl         = document.getElementById('toast');
+
+// Filter inputs
+const minLengthInput  = document.getElementById('min-length');
+const maxLengthInput  = document.getElementById('max-length');
+const stringMode      = document.getElementById('string-mode');
+const stringValue     = document.getElementById('string-value');
+const regexValue      = document.getElementById('regex-value');
+
+/* ── Helpers ────────────────────────────────────────────────────── */
+function showToast(msg, color = 'var(--green)') {
+  toastEl.textContent = msg;
+  toastEl.style.background = color;
+  toastEl.classList.add('show');
+  clearTimeout(toastEl._t);
+  toastEl._t = setTimeout(() => toastEl.classList.remove('show'), 2800);
+}
+
+function getFilterScope() {
+  return document.querySelector('input[name="filter-scope"]:checked').value;
+}
+
+function applyFilters(rawText) {
+  if (!rawText) return '';
+  const scope     = getFilterScope();
+  const minLen    = parseInt(minLengthInput.value) || 0;
+  const maxLen    = parseInt(maxLengthInput.value) || Infinity;
+  const strMode   = stringMode.value;
+  const strVal    = stringValue.value.toLowerCase().trim();
+  const regexStr  = regexValue.value.trim();
+
+  let regex = null;
+  if (regexStr) {
+    try { regex = new RegExp(regexStr); } catch { /* invalid */ }
+  }
+
+  function matchesWord(w) {
+    if (w.length < minLen) return false;
+    if (w.length > maxLen) return false;
+    if (strVal) {
+      const wl = w.toLowerCase();
+      if (strMode === 'starts'    && !wl.startsWith(strVal)) return false;
+      if (strMode === 'ends'      && !wl.endsWith(strVal))   return false;
+      if (strMode === 'contains'  && !wl.includes(strVal))   return false;
+    }
+    if (regex && !regex.test(w)) return false;
+    return true;
+  }
+
+  const lines = rawText.split('\n');
+
+  if (scope === 'words') {
+    return lines
+      .map(line => line.split(/\s+/).filter(w => w && matchesWord(w)).join(' '))
+      .filter(line => line.trim())
+      .join('\n');
+  } else {
+    // line scope: keep line if every non-empty word passes, or if line contains matching word
+    return lines
+      .filter(line => {
+        if (!line.trim()) return false;
+        const words = line.split(/\s+/).filter(Boolean);
+        return words.some(w => matchesWord(w));
+      })
+      .join('\n');
+  }
+}
+
+/* ── File management ────────────────────────────────────────────── */
+function updateButtons() {
+  extractBtn.disabled = state.files.length === 0;
+  clearBtn.disabled   = state.files.length === 0;
+}
+
+function addFiles(files) {
+  const imageFiles = Array.from(files).filter(f => f.type.startsWith('image/'));
+  if (!imageFiles.length) { showToast('No image files found', 'var(--yellow)'); return; }
+
+  imageFiles.forEach(file => {
+    if (state.files.some(f => f.name === file.name && f.size === file.size)) return; // dedupe
+    state.files.push(file);
+    renderPreview(file, state.files.length - 1);
+  });
+  updateButtons();
+}
+
+function removeFile(idx) {
+  state.files.splice(idx, 1);
+  state.rawTexts.splice(idx, 1);
+  renderAllPreviews();
+  updateButtons();
+  if (state.files.length === 0) {
+    resultsSection.classList.remove('visible');
+    bulkActions.classList.remove('visible');
+    resultsList.innerHTML = '';
+  }
+}
+
+function renderPreview(file, idx) {
+  const url = URL.createObjectURL(file);
+  const item = document.createElement('div');
+  item.className = 'preview-item';
+  item.dataset.idx = idx;
+  item.innerHTML = `
+    <img src="${url}" alt="${file.name}" />
+    <button class="remove-btn" title="Remove" aria-label="Remove ${file.name}">✕</button>
+    <div class="name-tag">${file.name}</div>
+  `;
+  item.querySelector('.remove-btn').addEventListener('click', () => removeFile(idx));
+  previewGrid.appendChild(item);
+}
+
+function renderAllPreviews() {
+  previewGrid.innerHTML = '';
+  state.files.forEach((f, i) => renderPreview(f, i));
+}
+
+function clearAll() {
+  state.files = [];
+  state.rawTexts = [];
+  previewGrid.innerHTML = '';
+  resultsList.innerHTML = '';
+  resultsSection.classList.remove('visible');
+  progressSection.classList.remove('visible');
+  bulkActions.classList.remove('visible');
+  updateButtons();
+}
+
+/* ── Drop Zone ──────────────────────────────────────────────────── */
+dropZone.addEventListener('click', () => fileInput.click());
+dropZone.addEventListener('keydown', e => {
+  if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); fileInput.click(); }
+});
+
+fileInput.addEventListener('change', () => {
+  addFiles(fileInput.files);
+  fileInput.value = '';
+});
+
+dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('drag-over'); });
+dropZone.addEventListener('dragleave', () => dropZone.classList.remove('drag-over'));
+dropZone.addEventListener('drop', e => {
+  e.preventDefault();
+  dropZone.classList.remove('drag-over');
+  addFiles(e.dataTransfer.files);
+});
+
+/* ── Advanced Filters toggle ────────────────────────────────────── */
+filtersToggle.addEventListener('click', () => {
+  const open = filtersBody.classList.toggle('open');
+  filtersToggle.classList.toggle('open', open);
+  filtersToggle.setAttribute('aria-expanded', open);
+});
+
+/* ── OCR ─────────────────────────────────────────────────────────── */
+extractBtn.addEventListener('click', runOCR);
+
+async function runOCR() {
+  if (!state.files.length) return;
+
+  extractBtn.disabled = true;
+  progressSection.classList.add('visible');
+  resultsSection.classList.remove('visible');
+  bulkActions.classList.remove('visible');
+  resultsList.innerHTML = '';
+  state.rawTexts = [];
+
+  const total = state.files.length;
+
+  for (let i = 0; i < total; i++) {
+    const file = state.files[i];
+    progressLabel.textContent = `Processing ${i + 1} / ${total}: ${file.name}`;
+    progressPct.textContent   = `${Math.round((i / total) * 100)}%`;
+    progressBar.style.width   = `${(i / total) * 100}%`;
+
+    try {
+      const { data: { text } } = await Tesseract.recognize(file, 'eng', {
+        logger: m => {
+          if (m.status === 'recognizing text') {
+            const overall = ((i + m.progress) / total) * 100;
+            progressBar.style.width = `${Math.min(overall, 99)}%`;
+            progressPct.textContent = `${Math.round(overall)}%`;
+          }
+        }
+      });
+      state.rawTexts.push(text);
+    } catch (err) {
+      console.error('OCR error', err);
+      state.rawTexts.push('');
+      showToast(`Error on ${file.name}`, 'var(--accent2)');
+    }
+  }
+
+  progressBar.style.width   = '100%';
+  progressPct.textContent   = '100%';
+  progressLabel.textContent = `Done — ${total} image${total !== 1 ? 's' : ''} processed`;
+
+  setTimeout(() => progressSection.classList.remove('visible'), 1200);
+
+  renderResults();
+  extractBtn.disabled = false;
+  updateButtons();
+}
+
+/* ── Render Results ─────────────────────────────────────────────── */
+function renderResults() {
+  resultsList.innerHTML = '';
+  let anyText = false;
+
+  state.rawTexts.forEach((raw, i) => {
+    const filtered = applyFilters(raw);
+    if (filtered.trim()) anyText = true;
+    renderResultItem(i, filtered);
+  });
+
+  if (!anyText) {
+    resultsList.innerHTML = `<div class="no-results">No text found. Try different images or adjust filters.</div>`;
+  }
+
+  resultsSection.classList.add('visible');
+  bulkActions.classList.add('visible');
+}
+
+function renderResultItem(idx, text) {
+  const file      = state.files[idx];
+  const wordCount = text.trim() ? text.trim().split(/\s+/).length : 0;
+  const item      = document.createElement('div');
+  item.className  = 'result-item';
+  item.dataset.idx = idx;
+
+  item.innerHTML = `
+    <div class="result-item-header">
+      <span class="filename">${file ? file.name : 'Image ' + (idx + 1)}</span>
+      <span class="word-count">${wordCount} word${wordCount !== 1 ? 's' : ''}</span>
+      <div class="result-item-btns">
+        <button class="btn btn-green copy-btn" title="Copy to clipboard">
+          <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2"
+               stroke-linecap="round" stroke-linejoin="round" width="14" height="14">
+            <rect x="4" y="4" width="10" height="12" rx="2"/>
+            <path d="M7 4V3a1 1 0 011-1h6a1 1 0 011 1v11a1 1 0 01-1 1h-1"/>
+          </svg>
+          Copy
+        </button>
+        <button class="btn btn-cyan download-btn" title="Download as .txt">
+          <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2"
+               stroke-linecap="round" stroke-linejoin="round" width="14" height="14">
+            <path d="M10 3v10m0 0l-3-3m3 3l3-3"/>
+            <path d="M4 17h12"/>
+          </svg>
+          Download
+        </button>
+      </div>
+    </div>
+    <textarea class="result-text" spellcheck="false" aria-label="Extracted text for ${file ? file.name : 'Image ' + (idx + 1)}">${escHtml(text || '(no text detected)')}</textarea>
+  `;
+
+  item.querySelector('.copy-btn').addEventListener('click', () => copyText(item));
+  item.querySelector('.download-btn').addEventListener('click', () => downloadText(idx));
+  resultsList.appendChild(item);
+}
+
+/* ── Clipboard / Download ───────────────────────────────────────── */
+function getTextareaValue(itemEl) {
+  return itemEl.querySelector('textarea').value;
+}
+
+function copyText(itemEl) {
+  const txt = getTextareaValue(itemEl);
+  navigator.clipboard.writeText(txt)
+    .then(() => showToast('Copied to clipboard ✓'))
+    .catch(() => {
+      // fallback
+      const el = document.createElement('textarea');
+      el.value = txt;
+      document.body.appendChild(el);
+      el.select();
+      document.execCommand('copy');
+      document.body.removeChild(el);
+      showToast('Copied to clipboard ✓');
+    });
+}
+
+function downloadText(idx) {
+  const itemEl = resultsList.querySelector(`.result-item[data-idx="${idx}"]`);
+  const txt    = getTextareaValue(itemEl);
+  const name   = (state.files[idx] ? state.files[idx].name.replace(/\.[^.]+$/, '') : 'extracted') + '.txt';
+  triggerDownload(txt, name);
+}
+
+function triggerDownload(content, filename) {
+  const a = document.createElement('a');
+  a.href  = URL.createObjectURL(new Blob([content], { type: 'text/plain' }));
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(a.href);
+  showToast(`Downloaded: ${filename}`);
+}
+
+/* ── Bulk Actions ───────────────────────────────────────────────── */
+bulkCopyBtn.addEventListener('click', () => {
+  const all = Array.from(resultsList.querySelectorAll('.result-item'))
+    .map(el => {
+      const fname = el.querySelector('.filename').textContent;
+      return `=== ${fname} ===\n${getTextareaValue(el)}`;
+    }).join('\n\n');
+  navigator.clipboard.writeText(all)
+    .then(() => showToast('All text copied ✓'))
+    .catch(() => showToast('Copy failed', 'var(--accent2)'));
+});
+
+bulkDownloadBtn.addEventListener('click', () => {
+  const all = Array.from(resultsList.querySelectorAll('.result-item'))
+    .map(el => {
+      const fname = el.querySelector('.filename').textContent;
+      return `=== ${fname} ===\n${getTextareaValue(el)}`;
+    }).join('\n\n');
+  triggerDownload(all, 'zOCRExtract_all.txt');
+});
+
+refilterBtn.addEventListener('click', () => {
+  if (!state.rawTexts.length) return;
+  renderResults();
+  showToast('Filters re-applied ✓', 'var(--accent3)');
+});
+
+/* ── Clear ──────────────────────────────────────────────────────── */
+clearBtn.addEventListener('click', clearAll);
+
+/* ── Utils ──────────────────────────────────────────────────────── */
+function escHtml(str) {
+  return str.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+</script>
+</body>
+</html>
